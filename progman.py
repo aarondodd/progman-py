@@ -24,7 +24,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import QByteArray, Qt, QSize
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -50,7 +50,6 @@ from PyQt6.QtWidgets import (
     QMdiArea,
     QMdiSubWindow,
     QStatusBar,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -210,6 +209,7 @@ class AppModel:
             config_path if config_path is not None else Path.home() / ".progman.json"
         )
         self.theme: str = "system"  # "system" | "classic"
+        self.layout_state: str = ""
         self.groups: List[ProgramGroup] = []
         self.load()
 
@@ -231,12 +231,15 @@ class AppModel:
         if self.theme not in ("system", "classic"):
             self.theme = "system"
 
+        self.layout_state = data.get("layout_state", "")
+
         groups_data = data.get("groups", [])
         self.groups = [ProgramGroup.from_dict(g) for g in groups_data]
 
     def save(self) -> None:
         data = {
             "theme": self.theme,
+            "layout_state": self.layout_state,
             "groups": [g.to_dict() for g in self.groups],
         }
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -593,6 +596,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_groups()
+        self._restore_layout()
 
         self.setWindowTitle("Program Manager (progman.py)")
         self.resize(900, 600)
@@ -601,7 +605,6 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self._build_menubar()
-        self._build_toolbar()
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()
@@ -660,20 +663,6 @@ class MainWindow(QMainWindow):
         window_menu.addAction(tile_act)
         window_menu.addAction(cascade_act)
 
-    def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main Toolbar", self)
-        toolbar.setMovable(True)
-        self.addToolBar(toolbar)
-
-        new_group_act = QAction("New Group", self)
-        new_group_act.triggered.connect(self._new_group)
-
-        save_act = QAction("Save", self)
-        save_act.triggered.connect(self._save)
-
-        toolbar.addAction(new_group_act)
-        toolbar.addAction(save_act)
-
     # ----- Theme handling -----
 
     def _set_theme(self, theme: str) -> None:
@@ -713,6 +702,21 @@ class MainWindow(QMainWindow):
         self.mdi.addSubWindow(sub)
         sub.show()
         return sub
+
+    def _capture_layout(self) -> None:
+        state = self.mdi.saveState()
+        if not state.isEmpty():
+            self.model.layout_state = bytes(state.toBase64()).decode("ascii")
+        else:
+            self.model.layout_state = ""
+
+    def _restore_layout(self) -> None:
+        if not self.model.layout_state:
+            return
+
+        state = QByteArray.fromBase64(self.model.layout_state.encode("ascii"))
+        if not state.isEmpty():
+            self.mdi.restoreState(state)
 
     def _current_group_window(self) -> Optional[GroupWindow]:
         sub = self.mdi.activeSubWindow()
@@ -775,6 +779,7 @@ class MainWindow(QMainWindow):
             sub.close()
 
     def _save(self) -> None:
+        self._capture_layout()
         self.model.save()
         self.status_bar.showMessage("Configuration saved.", 3000)
 
@@ -782,7 +787,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         # Auto-save on close
-        self.model.save()
+        self._save()
         super().closeEvent(event)
 
 
