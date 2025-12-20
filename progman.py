@@ -11,10 +11,13 @@ Tested conceptually for:
 
 Config:
     Stored as JSON in ~/.progman.json by default.
+
+Themes:
+    - System (default): use OS/Qt default palette and styling.
+    - Classic Colors: Win 3.x-ish palette and basic retro styling.
 """
 
 import json
-import os
 import subprocess
 import sys
 from dataclasses import dataclass, asdict, field
@@ -22,7 +25,15 @@ from pathlib import Path
 from typing import List, Optional
 
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QIcon, QAction
+from PyQt6.QtGui import (
+    QAction,
+    QColor,
+    QFont,
+    QIcon,
+    QPainter,
+    QPalette,
+    QPixmap,
+)
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -43,6 +54,108 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+# -----------------------------
+# Theme + Icons
+# -----------------------------
+
+
+class ThemeManager:
+    """
+    Theme switching:
+      - system  : do not force palette/stylesheet (uses OS/Qt defaults)
+      - classic : Win 3.x-ish colors + light styling
+    """
+
+    CLASSIC_STYLESHEET = """
+    QMainWindow, QWidget {
+        background: #C0C0C0;
+        color: #000000;
+    }
+    QMenuBar, QMenu, QToolBar, QStatusBar {
+        background: #C0C0C0;
+        color: #000000;
+    }
+    QMenu::item:selected {
+        background: #000080;
+        color: #FFFFFF;
+    }
+    QListWidget {
+        background: #C0C0C0;
+        color: #000000;
+    }
+    QMdiArea {
+        background: #808080;
+    }
+    QMdiSubWindow {
+        background: #C0C0C0;
+    }
+    """
+
+    @staticmethod
+    def apply(app: QApplication, theme: str) -> None:
+        theme = (theme or "system").lower()
+
+        if theme == "classic":
+            app.setStyleSheet(ThemeManager.CLASSIC_STYLESHEET)
+
+            pal = QPalette()
+            # Rough Win 3.x / classic Windows-ish palette
+            pal.setColor(QPalette.ColorRole.Window, QColor("#C0C0C0"))
+            pal.setColor(QPalette.ColorRole.WindowText, QColor("#000000"))
+            pal.setColor(QPalette.ColorRole.Base, QColor("#FFFFFF"))
+            pal.setColor(QPalette.ColorRole.AlternateBase, QColor("#C0C0C0"))
+            pal.setColor(QPalette.ColorRole.Text, QColor("#000000"))
+            pal.setColor(QPalette.ColorRole.Button, QColor("#C0C0C0"))
+            pal.setColor(QPalette.ColorRole.ButtonText, QColor("#000000"))
+            pal.setColor(QPalette.ColorRole.Highlight, QColor("#000080"))
+            pal.setColor(QPalette.ColorRole.HighlightedText, QColor("#FFFFFF"))
+            app.setPalette(pal)
+
+            # Optional: slightly more “retro” feel
+            f = app.font()
+            f.setPointSize(max(9, f.pointSize()))
+            app.setFont(f)
+        else:
+            # System: remove forced styling/palette
+            app.setStyleSheet("")
+            app.setPalette(app.style().standardPalette())
+
+
+def make_classic_fallback_icon(title: str) -> QIcon:
+    """
+    Generates a simple 32x32 retro-ish icon:
+      - light gray tile
+      - dark border
+      - blue title initial
+    """
+    size = 32
+    pm = QPixmap(size, size)
+    pm.fill(QColor("#C0C0C0"))
+
+    p = QPainter(pm)
+    p.setPen(QColor("#000000"))
+    p.drawRect(0, 0, size - 1, size - 1)
+
+    # Inner “raised” look (subtle)
+    p.setPen(QColor("#FFFFFF"))
+    p.drawLine(1, 1, size - 2, 1)
+    p.drawLine(1, 1, 1, size - 2)
+    p.setPen(QColor("#808080"))
+    p.drawLine(1, size - 2, size - 2, size - 2)
+    p.drawLine(size - 2, 1, size - 2, size - 2)
+
+    ch = (title.strip()[:1] or "?").upper()
+    p.setPen(QColor("#000080"))
+    font = QFont()
+    font.setBold(True)
+    font.setPointSize(14)
+    p.setFont(font)
+    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, ch)
+
+    p.end()
+    return QIcon(pm)
+
 
 # -----------------------------
 # Model
@@ -96,6 +209,7 @@ class AppModel:
         self.config_path: Path = (
             config_path if config_path is not None else Path.home() / ".progman.json"
         )
+        self.theme: str = "system"  # "system" | "classic"
         self.groups: List[ProgramGroup] = []
         self.load()
 
@@ -113,11 +227,18 @@ class AppModel:
             self._load_default()
             return
 
+        self.theme = data.get("theme", "system")
+        if self.theme not in ("system", "classic"):
+            self.theme = "system"
+
         groups_data = data.get("groups", [])
         self.groups = [ProgramGroup.from_dict(g) for g in groups_data]
 
     def save(self) -> None:
-        data = {"groups": [g.to_dict() for g in self.groups]}
+        data = {
+            "theme": self.theme,
+            "groups": [g.to_dict() for g in self.groups],
+        }
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
         with self.config_path.open("w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
@@ -191,7 +312,9 @@ class ProgramItemDialog(QDialog):
     Dialog to create or edit a ProgramItem.
     """
 
-    def __init__(self, parent: Optional[QWidget] = None, item: Optional[ProgramItem] = None) -> None:
+    def __init__(
+        self, parent: Optional[QWidget] = None, item: Optional[ProgramItem] = None
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Program Item")
         self._item = item
@@ -309,7 +432,9 @@ class QLineEditWithBrowse(QWidget):
 
     def _on_browse(self) -> None:
         if self.dir_mode:
-            directory = QFileDialog.getExistingDirectory(self, "Select Working Directory")
+            directory = QFileDialog.getExistingDirectory(
+                self, "Select Working Directory"
+            )
             if directory:
                 self.edit.setText(directory)
         else:
@@ -382,8 +507,9 @@ class GroupWindow(QWidget):
     def _get_icon_for_item(self, item: ProgramItem) -> Optional[QIcon]:
         if item.icon_path and Path(item.icon_path).exists():
             return QIcon(item.icon_path)
-        # Fallback: no icon or default
-        return None
+
+        # Classic-inspired fallback icon (avoids bundling copyrighted icon sets)
+        return make_classic_fallback_icon(item.title)
 
     def _on_item_double_clicked(self, lw_item: QListWidgetItem) -> None:
         item: ProgramItem = lw_item.data(Qt.ItemDataRole.UserRole)
@@ -456,6 +582,9 @@ class MainWindow(QMainWindow):
         self.model = model
         self.launcher = Launcher()
 
+        self.action_colors_system: Optional[QAction] = None
+        self.action_colors_classic: Optional[QAction] = None
+
         self.mdi = QMdiArea(self)
         self.setCentralWidget(self.mdi)
 
@@ -493,6 +622,22 @@ class MainWindow(QMainWindow):
         file_menu.addSeparator()
         file_menu.addAction(exit_act)
 
+        # View menu (theme/colors)
+        view_menu = menubar.addMenu("&View")
+        colors_menu = view_menu.addMenu("&Colors")
+
+        self.action_colors_system = QAction("System", self, checkable=True)
+        self.action_colors_classic = QAction("Classic Colors", self, checkable=True)
+
+        self.action_colors_system.setChecked(self.model.theme == "system")
+        self.action_colors_classic.setChecked(self.model.theme == "classic")
+
+        self.action_colors_system.triggered.connect(lambda: self._set_theme("system"))
+        self.action_colors_classic.triggered.connect(lambda: self._set_theme("classic"))
+
+        colors_menu.addAction(self.action_colors_system)
+        colors_menu.addAction(self.action_colors_classic)
+
         # Group menu
         group_menu = menubar.addMenu("&Group")
         rename_group_act = QAction("&Rename Group...", self)
@@ -528,6 +673,29 @@ class MainWindow(QMainWindow):
 
         toolbar.addAction(new_group_act)
         toolbar.addAction(save_act)
+
+    # ----- Theme handling -----
+
+    def _set_theme(self, theme: str) -> None:
+        theme = (theme or "system").lower()
+        if theme not in ("system", "classic"):
+            theme = "system"
+
+        self.model.theme = theme
+        ThemeManager.apply(QApplication.instance(), theme)
+
+        # Update checkmarks (exclusive)
+        if self.action_colors_system is not None and self.action_colors_classic is not None:
+            self.action_colors_system.blockSignals(True)
+            self.action_colors_classic.blockSignals(True)
+
+            self.action_colors_system.setChecked(theme == "system")
+            self.action_colors_classic.setChecked(theme == "classic")
+
+            self.action_colors_system.blockSignals(False)
+            self.action_colors_classic.blockSignals(False)
+
+        self._save()
 
     # ----- Groups handling -----
 
@@ -627,6 +795,8 @@ def main() -> None:
     app = QApplication(sys.argv)
 
     model = AppModel()
+    ThemeManager.apply(app, model.theme)
+
     window = MainWindow(model)
     window.show()
 
