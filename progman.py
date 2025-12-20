@@ -24,7 +24,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import Qt, QSize
+from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -50,7 +50,6 @@ from PyQt6.QtWidgets import (
     QMdiArea,
     QMdiSubWindow,
     QStatusBar,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -210,6 +209,7 @@ class AppModel:
             config_path if config_path is not None else Path.home() / ".progman.json"
         )
         self.theme: str = "system"  # "system" | "classic"
+        self.layout_state: str = ""
         self.groups: List[ProgramGroup] = []
         self.load()
 
@@ -231,12 +231,15 @@ class AppModel:
         if self.theme not in ("system", "classic"):
             self.theme = "system"
 
+        self.layout_state = data.get("layout_state", "")
+
         groups_data = data.get("groups", [])
         self.groups = [ProgramGroup.from_dict(g) for g in groups_data]
 
     def save(self) -> None:
         data = {
             "theme": self.theme,
+            "layout_state": self.layout_state,
             "groups": [g.to_dict() for g in self.groups],
         }
         self.config_path.parent.mkdir(parents=True, exist_ok=True)
@@ -593,6 +596,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._load_groups()
+        self._restore_layout()
 
         self.setWindowTitle("Program Manager (progman.py)")
         self.resize(900, 600)
@@ -601,7 +605,6 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self._build_menubar()
-        self._build_toolbar()
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()
@@ -660,20 +663,6 @@ class MainWindow(QMainWindow):
         window_menu.addAction(tile_act)
         window_menu.addAction(cascade_act)
 
-    def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main Toolbar", self)
-        toolbar.setMovable(True)
-        self.addToolBar(toolbar)
-
-        new_group_act = QAction("New Group", self)
-        new_group_act.triggered.connect(self._new_group)
-
-        save_act = QAction("Save", self)
-        save_act.triggered.connect(self._save)
-
-        toolbar.addAction(new_group_act)
-        toolbar.addAction(save_act)
-
     # ----- Theme handling -----
 
     def _set_theme(self, theme: str) -> None:
@@ -713,6 +702,73 @@ class MainWindow(QMainWindow):
         self.mdi.addSubWindow(sub)
         sub.show()
         return sub
+
+    def _capture_layout(self) -> None:
+        layout = []
+        for sub in self.mdi.subWindowList():
+            widget = sub.widget()
+            if not isinstance(widget, GroupWindow):
+                continue
+
+            geom = sub.geometry()
+            if geom.isValid():
+                geometry = [geom.x(), geom.y(), geom.width(), geom.height()]
+            else:
+                geometry = None
+
+            if sub.isMaximized():
+                state = "maximized"
+            elif sub.isMinimized():
+                state = "minimized"
+            else:
+                state = "normal"
+
+            layout.append(
+                {
+                    "title": widget.group.title,
+                    "geometry": geometry,
+                    "state": state,
+                }
+            )
+
+        self.model.layout_state = json.dumps(layout)
+
+    def _restore_layout(self) -> None:
+        if not self.model.layout_state:
+            return
+
+        try:
+            layout = json.loads(self.model.layout_state)
+        except Exception:
+            # Ignore invalid/legacy layouts
+            return
+
+        layout_by_title = {
+            entry.get("title"): entry for entry in layout if isinstance(entry, dict)
+        }
+
+        for sub in self.mdi.subWindowList():
+            widget = sub.widget()
+            if not isinstance(widget, GroupWindow):
+                continue
+
+            data = layout_by_title.get(widget.group.title)
+            if not data:
+                continue
+
+            geometry = data.get("geometry")
+            if isinstance(geometry, list) and len(geometry) == 4:
+                rect = QRect(*geometry)
+                if rect.isValid():
+                    sub.setGeometry(rect)
+
+            state = data.get("state", "normal")
+            if state == "maximized":
+                sub.showMaximized()
+            elif state == "minimized":
+                sub.showMinimized()
+            else:
+                sub.showNormal()
 
     def _current_group_window(self) -> Optional[GroupWindow]:
         sub = self.mdi.activeSubWindow()
@@ -775,6 +831,7 @@ class MainWindow(QMainWindow):
             sub.close()
 
     def _save(self) -> None:
+        self._capture_layout()
         self.model.save()
         self.status_bar.showMessage("Configuration saved.", 3000)
 
@@ -782,7 +839,7 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event) -> None:
         # Auto-save on close
-        self.model.save()
+        self._save()
         super().closeEvent(event)
 
 
