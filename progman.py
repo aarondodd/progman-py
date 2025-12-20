@@ -50,7 +50,6 @@ from PyQt6.QtWidgets import (
     QMdiArea,
     QMdiSubWindow,
     QStatusBar,
-    QToolBar,
     QVBoxLayout,
     QWidget,
 )
@@ -601,7 +600,6 @@ class MainWindow(QMainWindow):
 
     def _build_ui(self) -> None:
         self._build_menubar()
-        self._build_toolbar()
 
     def _build_menubar(self) -> None:
         menubar = self.menuBar()
@@ -659,20 +657,6 @@ class MainWindow(QMainWindow):
 
         window_menu.addAction(tile_act)
         window_menu.addAction(cascade_act)
-
-    def _build_toolbar(self) -> None:
-        toolbar = QToolBar("Main Toolbar", self)
-        toolbar.setMovable(True)
-        self.addToolBar(toolbar)
-
-        new_group_act = QAction("New Group", self)
-        new_group_act.triggered.connect(self._new_group)
-
-        save_act = QAction("Save", self)
-        save_act.triggered.connect(self._save)
-
-        toolbar.addAction(new_group_act)
-        toolbar.addAction(save_act)
 
     # ----- Theme handling -----
 
