@@ -24,7 +24,7 @@ from dataclasses import dataclass, asdict, field
 from pathlib import Path
 from typing import List, Optional
 
-from PyQt6.QtCore import QByteArray, Qt, QSize
+from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import (
     QAction,
     QColor,
@@ -704,19 +704,71 @@ class MainWindow(QMainWindow):
         return sub
 
     def _capture_layout(self) -> None:
-        state = self.mdi.saveState()
-        if not state.isEmpty():
-            self.model.layout_state = bytes(state.toBase64()).decode("ascii")
-        else:
-            self.model.layout_state = ""
+        layout = []
+        for sub in self.mdi.subWindowList():
+            widget = sub.widget()
+            if not isinstance(widget, GroupWindow):
+                continue
+
+            geom = sub.geometry()
+            if geom.isValid():
+                geometry = [geom.x(), geom.y(), geom.width(), geom.height()]
+            else:
+                geometry = None
+
+            if sub.isMaximized():
+                state = "maximized"
+            elif sub.isMinimized():
+                state = "minimized"
+            else:
+                state = "normal"
+
+            layout.append(
+                {
+                    "title": widget.group.title,
+                    "geometry": geometry,
+                    "state": state,
+                }
+            )
+
+        self.model.layout_state = json.dumps(layout)
 
     def _restore_layout(self) -> None:
         if not self.model.layout_state:
             return
 
-        state = QByteArray.fromBase64(self.model.layout_state.encode("ascii"))
-        if not state.isEmpty():
-            self.mdi.restoreState(state)
+        try:
+            layout = json.loads(self.model.layout_state)
+        except Exception:
+            # Ignore invalid/legacy layouts
+            return
+
+        layout_by_title = {
+            entry.get("title"): entry for entry in layout if isinstance(entry, dict)
+        }
+
+        for sub in self.mdi.subWindowList():
+            widget = sub.widget()
+            if not isinstance(widget, GroupWindow):
+                continue
+
+            data = layout_by_title.get(widget.group.title)
+            if not data:
+                continue
+
+            geometry = data.get("geometry")
+            if isinstance(geometry, list) and len(geometry) == 4:
+                rect = QRect(*geometry)
+                if rect.isValid():
+                    sub.setGeometry(rect)
+
+            state = data.get("state", "normal")
+            if state == "maximized":
+                sub.showMaximized()
+            elif state == "minimized":
+                sub.showMinimized()
+            else:
+                sub.showNormal()
 
     def _current_group_window(self) -> Optional[GroupWindow]:
         sub = self.mdi.activeSubWindow()
