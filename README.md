@@ -2,6 +2,8 @@
 
 A cross-platform, PyQt6-based recreation of the Windows 3.x Program Manager. The app organizes shortcuts into groups, lets you edit them in a retro-inspired interface, and launches them with the classic Program Manager feel.
 
+![screenshot: Windows 11](screenshots/win11.png)
+
 ## Features
 - **Classic or system theming:** Switch between default Qt styling and a custom palette that mimics Windows 3.x colors.
 - **Organized shortcuts:** Create, rename, or delete program groups and add launchable items with custom titles, commands, icons, and working directories.
