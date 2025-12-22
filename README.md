@@ -1,6 +1,6 @@
 # progman-py
 
-A cross-platform, PyQt6-based recreation of the Windows 3.x Program Manager. The app organizes shortcuts into groups, lets you edit them in a retro-inspired interface, and launches them with the classic Program Manager feel.
+A cross-platform, PyQt6-based recreation of the [Windows 3.x Program Manager](https://en.wikipedia.org/wiki/Program_Manager). The app organizes shortcuts into groups, lets you edit them in a retro-inspired interface, and launches them with the classic Program Manager feel.
 
 ![screenshot: Windows 11](screenshots/win11.png)
 
