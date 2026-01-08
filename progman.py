@@ -27,6 +27,7 @@ from typing import List, Optional
 from PyQt6.QtCore import Qt, QRect, QSize
 from PyQt6.QtGui import (
     QAction,
+    QBrush,
     QColor,
     QFont,
     QIcon,
@@ -136,7 +137,7 @@ def make_classic_fallback_icon(title: str) -> QIcon:
     p.setPen(QColor("#000000"))
     p.drawRect(0, 0, size - 1, size - 1)
 
-    # Inner “raised” look (subtle)
+    # Inner "raised" look (subtle)
     p.setPen(QColor("#FFFFFF"))
     p.drawLine(1, 1, size - 2, 1)
     p.drawLine(1, 1, 1, size - 2)
@@ -151,6 +152,34 @@ def make_classic_fallback_icon(title: str) -> QIcon:
     font.setPointSize(14)
     p.setFont(font)
     p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, ch)
+
+    p.end()
+    return QIcon(pm)
+
+
+def make_group_icon() -> QIcon:
+    """
+    Generates a simple 16x16 group/folder icon for MDI sub-windows:
+      - yellow folder-like shape
+      - dark outline
+    """
+    size = 16
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+
+    # Draw folder shape
+    # Folder body (yellow)
+    p.setPen(QColor("#000000"))
+    p.setBrush(QBrush(QColor("#FFFF00")))
+
+    # Simple folder: rectangle with a tab on top
+    # Tab
+    p.drawRect(2, 2, 5, 2)
+    # Body
+    p.drawRect(2, 4, 12, 10)
 
     p.end()
     return QIcon(pm)
@@ -591,6 +620,10 @@ class MainWindow(QMainWindow):
         self.mdi = QMdiArea(self)
         self.setCentralWidget(self.mdi)
 
+        # Set initial MDI background based on theme
+        if self.model.theme == "classic":
+            self.mdi.setBackground(QBrush(QColor("#808080")))
+
         self.status_bar = QStatusBar(self)
         self.setStatusBar(self.status_bar)
 
@@ -673,6 +706,13 @@ class MainWindow(QMainWindow):
         self.model.theme = theme
         ThemeManager.apply(QApplication.instance(), theme)
 
+        # Explicitly set MDI area background
+        if theme == "classic":
+            self.mdi.setBackground(QBrush(QColor("#808080")))
+        else:
+            # Reset to system default
+            self.mdi.setBackground(QBrush())
+
         # Update checkmarks (exclusive)
         if self.action_colors_system is not None and self.action_colors_classic is not None:
             self.action_colors_system.blockSignals(True)
@@ -699,6 +739,7 @@ class MainWindow(QMainWindow):
         sub.setWidget(widget)
         sub.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         sub.setWindowTitle(group.title)
+        sub.setWindowIcon(make_group_icon())  # Simple folder icon
         self.mdi.addSubWindow(sub)
         sub.show()
         return sub
