@@ -4,13 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-A cross-platform PyQt6-based recreation of the Windows 3.x Program Manager. Single-file application (`progman.py`) that provides a retro MDI interface for organizing and launching programs.
+A cross-platform PyQt6-based recreation of the Windows 3.x Program Manager. Structured as a Python package (`progman/`) with a thin `main.py` entry point.
 
 ## Development Commands
 
 ### Running the application
 ```bash
-python progman.py
+python main.py
+```
+
+### Running tests
+```bash
+source .venv/bin/activate
+QT_QPA_PLATFORM=offscreen pytest tests/ -v
 ```
 
 ### Building executable
@@ -18,11 +24,11 @@ python progman.py
 # Linux/macOS
 ./build.sh
 
-# Windows
-build.cmd
+# Windows (PowerShell)
+./build.ps1
 
 # Manual build command
-pyinstaller --noconfirm --clean --windowed --onefile --name progman progman.py
+pyinstaller --noconfirm --clean --windowed --onefile --name progman --collect-all PyQt6 main.py
 ```
 
 The built executable appears in `dist/progman` (or `dist/progman.exe` on Windows).
@@ -31,117 +37,142 @@ The built executable appears in `dist/progman` (or `dist/progman.exe` on Windows
 ```bash
 pip install -r requirements.txt
 
+# For development/testing
+pip install -r requirements-dev.txt
+
 # For building executables
 pip install pyinstaller
 ```
 
 ## Architecture
 
-### Single-File Design
-The entire application lives in `progman.py` (~865 lines). All UI, models, and logic are in this one file. When making changes, be aware that:
-- No module imports from other project files
-- All classes and functions are in the same namespace
-- Changes ripple through the entire application in one file
+### Package Structure
+```
+progman-py/
+├── main.py                           # Thin entry point: creates QApp, AppModel, MainWindow
+├── progman/
+│   ├── __init__.py                   # Re-exports __version__
+│   ├── version.py                    # Single source of truth: "1.0.0"
+│   ├── app.py                        # MainWindow + UpgradeWorker + UpgradeProgressDialog
+│   ├── models/
+│   │   ├── program_item.py           # ProgramItem dataclass
+│   │   ├── program_group.py          # ProgramGroup dataclass
+│   │   └── app_model.py              # AppModel (config load/save/migration)
+│   ├── widgets/
+│   │   ├── group_window.py           # GroupWindow (MDI child) with drag-and-drop
+│   │   ├── program_item_dialog.py    # ProgramItemDialog + QLineEditWithBrowse
+│   │   └── scan_dialog.py            # ScanForProgramsDialog
+│   ├── utils/
+│   │   ├── config.py                 # Config dir, version check timestamps
+│   │   ├── icons.py                  # make_classic_fallback_icon(), make_group_icon()
+│   │   ├── launcher.py               # Launcher class
+│   │   ├── scanner.py                # Platform-specific app discovery
+│   │   ├── theme.py                  # ThemeManager with light/dark stylesheets
+│   │   └── updater.py                # GitHub-based update checker
+│   └── workers/
+│       └── scan_worker.py            # Background program scanning
+└── tests/
+    ├── conftest.py                   # QApp fixture, tmp_config, offscreen setup
+    ├── test_models.py
+    ├── test_config_migration.py
+    ├── test_launcher.py
+    ├── test_scanner.py
+    ├── test_theme.py
+    ├── test_updater.py
+    ├── test_widgets.py
+    └── test_drag_drop.py
+```
 
-### Key Components (in order of appearance in file)
+### Key Components
 
-**ThemeManager** (lines 62-122)
-- Static class managing application-wide theme switching
-- Two themes: "system" (Qt defaults) and "classic" (Win 3.x palette)
-- `apply()` method modifies QApplication palette and stylesheet globally
-- Classic theme uses hardcoded hex colors (#C0C0C0, #000080, etc.)
+**version.py**
+- Single source of truth for version number
+- Exports `__version__`, `VERSION_TUPLE`, `get_version()`
 
-**make_classic_fallback_icon()** (lines 124-156)
-- Generates 32×32 QIcon at runtime when no custom icon provided
-- Creates retro-style tile with raised border and blue initial letter
-- Used by every item without an `icon_path`
+**AppModel** (`models/app_model.py`)
+- Config load/save with JSON persistence at `~/.progman.json`
+- Config migration system: `config_version` field, `_migrate_v0_to_v1()` for old format upgrade
+- Fields: `dark_mode` (bool), `layout_state` (JSON string), `groups`, `github` (dict)
 
-**Data Models** (lines 164-273)
-- `ProgramItem`: Dataclass for individual launchable programs (title, command, working_dir, icon_path)
-- `ProgramGroup`: Container for lists of ProgramItems
-- `AppModel`: Global application state holding all groups, theme choice, and MDI window layout
-- All models have `to_dict()`/`from_dict()` for JSON serialization
-- Config stored in `~/.progman.json` by default
+**ThemeManager** (`utils/theme.py`)
+- Static class with centralized color constants
+- `DARK_STYLESHEET` and `LIGHT_STYLESHEET` as class-level QSS strings
+- `apply(app, dark_mode)` sets the application-wide stylesheet
+- All colors defined as class constants (e.g., `DARK_BG_PRIMARY`, `LIGHT_ACCENT`)
 
-**Launcher** (lines 280-305)
-- Static class with single `launch()` method
-- Uses `subprocess.Popen()` with `shell=True` for cross-platform compatibility
-- Shows QMessageBox on launch failures
+**GroupWindow** (`widgets/group_window.py`)
+- MDI child window with QListWidget in IconMode
+- Drag-and-drop: within-group reorder + cross-group transfer
+- Module-level `_drag_state` dict tracks active drag for cross-group moves
+- `items_changed` signal triggers auto-save
 
-**ProgramItemDialog** (lines 313-402)
-- Modal dialog for creating/editing program items
-- Uses composite `QLineEditWithBrowse` widgets (lines 405-457) for file/directory selection
-- Enforces required fields (title and command) before accepting
+**Scanner** (`utils/scanner.py`)
+- Platform-specific: `_scan_linux()`, `_scan_windows()`, `_scan_macos()`
+- Linux: parses .desktop files, maps FreeDesktop categories
+- Windows: PowerShell-based .lnk parsing (no pywin32)
+- macOS: plistlib-based Info.plist parsing
 
-**GroupWindow** (lines 465-570)
-- MDI child window displaying one ProgramGroup
-- Icon view using QListWidget in IconMode
-- Context menu for New/Edit/Delete operations on items
-- Double-click launches the program
-- Stores reference to `ProgramItem` in list item's UserRole data
+**Updater** (`utils/updater.py`)
+- GitHub public API (no auth): `GET /repos/{owner}/{repo}/releases/latest`
+- 7-day check interval via timestamp file at `~/.progman/.version_check`
+- Version comparison via tuple comparison
+- Download/extract/build pipeline with progress callbacks
 
-**MainWindow** (lines 578-843)
-- QMainWindow with QMdiArea as central widget
-- Creates one QMdiSubWindow per group
-- Menu structure: File (new group, save, exit), View (colors), Group (rename, delete), Window (tile, cascade)
-- `_capture_layout()` / `_restore_layout()` serialize/deserialize window positions and states
-- Auto-saves on close via `closeEvent()`
+**MainWindow** (`app.py`)
+- QMainWindow with QMdiArea
+- Menus: File (new group, scan, save, exit), View (dark mode), Group (rename, delete), Window (tile, cascade), Help (updates, about)
+- `UpgradeWorker` (QThread) + `UpgradeProgressDialog` for self-upgrade
+- Auto-check for updates 2s after startup
 
 ### Data Flow
 
-1. **Startup**: `main()` → `AppModel()` loads `~/.progman.json` → `MainWindow()` creates MDI windows for each group
-2. **Launch Item**: Double-click item → `GroupWindow._on_item_double_clicked()` → `Launcher.launch()` → `subprocess.Popen()`
-3. **Edit Item**: Context menu → `ProgramItemDialog` → modifies `ProgramItem` in-place → `GroupWindow.refresh_items()` updates UI
-4. **Theme Switch**: Menu action → `MainWindow._set_theme()` → `ThemeManager.apply()` → modifies QApplication palette/stylesheet → auto-saves
-5. **Save**: Any action triggers `MainWindow._save()` → `_capture_layout()` → `AppModel.save()` → writes JSON
+1. **Startup**: `main.py` → `AppModel()` loads config → `ThemeManager.apply()` → `MainWindow()` creates MDI windows
+2. **Config migration**: `AppModel.load()` detects `config_version < 1` → `_migrate_v0_to_v1()` → auto-save
+3. **Theme toggle**: View menu → `_toggle_dark_mode()` → `ThemeManager.apply()` → updates all GroupWindows → save
+4. **Launch item**: Double-click → `GroupWindow._on_item_double_clicked()` → `Launcher.launch()` → `subprocess.Popen()`
+5. **Drag-drop**: Source sets `_drag_state` → target receives item → source removes → both emit `items_changed` → auto-save
+6. **Scan programs**: File menu → `ScanWorker` (QThread) → `ScanForProgramsDialog` → creates groups/items → save
+7. **Update check**: `QTimer.singleShot(2000)` → `check_for_updates()` → shows notification if newer version available
 
-### Configuration Format
+### Configuration Format (v1)
 
-`~/.progman.json` structure:
 ```json
 {
-  "theme": "system" | "classic",
-  "layout_state": "[{\"title\": \"...\", \"geometry\": [x,y,w,h], \"state\": \"normal|minimized|maximized\"}]",
-  "groups": [
-    {
-      "title": "Group Name",
-      "items": [
-        {
-          "title": "Item Title",
-          "command": "executable path or shell command",
-          "working_dir": "optional working directory",
-          "icon_path": "optional icon file path"
-        }
-      ]
-    }
-  ]
+  "config_version": 1,
+  "dark_mode": false,
+  "layout_state": "[{\"title\": \"...\", \"geometry\": [x,y,w,h], \"state\": \"normal\"}]",
+  "github": {"owner": "aarondodd", "repo": "progman-py"},
+  "groups": [...]
 }
 ```
 
 ## Important Constraints
 
-- **Single file**: Don't split into modules. All code must remain in `progman.py`.
-- **Cross-platform**: Test changes work on Windows (shell commands, paths) and Linux/macOS.
-- **No external icon assets required**: Fallback icons are always generated at runtime.
-- **shell=True**: Commands are executed through the shell for user convenience. Be mindful of security if accepting untrusted input (current design assumes trusted local config).
-- **Theme applies globally**: Changing theme affects entire QApplication immediately, not just MainWindow.
-- **MDI layout persistence**: Window positions/states are saved as JSON string in config.
+- **Virtual environment**: Always activate `.venv` before running or testing (`source .venv/bin/activate`)
+- **Cross-platform**: Test changes work on Windows (shell commands, paths) and Linux/macOS
+- **Theme centralization**: All colors defined in `ThemeManager` class constants. Don't add colors elsewhere
+- **Config migration**: When changing config format, increment `CONFIG_VERSION` and add a migration function
+- **Tests run headless**: `QT_QPA_PLATFORM=offscreen` is set in `conftest.py`
+- **Tests use temp configs**: Never touch `~/.progman.json` in tests - use `tmp_path` fixtures
 
 ## Common Patterns
 
 ### Adding a new menu action
-1. Create QAction in `MainWindow._build_menubar()`
-2. Connect to handler method (e.g., `action.triggered.connect(self._my_handler)`)
-3. Implement handler as `MainWindow._my_handler(self)`
-4. Call `self._save()` if state changes
+1. Create QAction in `MainWindow._build_menubar()` in `app.py`
+2. Connect to handler method
+3. Call `self._save()` if state changes
 
-### Modifying a ProgramItem
-1. Get item reference from QListWidgetItem's UserRole data
-2. Edit item fields directly (items are mutable dataclass instances)
-3. Call `GroupWindow.refresh_items()` to update UI
-4. Changes auto-save when MainWindow saves
+### Adding a config field
+1. Add field to `AppModel.__init__()`
+2. Read it in `AppModel.load()`
+3. Write it in `AppModel.save()`
+4. If format change: increment `CONFIG_VERSION`, add migration function
 
-### Changing theme behavior
-1. Modify `ThemeManager.CLASSIC_STYLESHEET` for stylesheet changes
-2. Modify `ThemeManager.apply()` palette setup for color changes
-3. Theme applies immediately via `QApplication.instance()` reference
+### Modifying theme colors
+1. Update the color constant in `ThemeManager` (e.g., `DARK_BG_PRIMARY`)
+2. The constant is used in the stylesheet template automatically
+
+### Adding a new widget
+1. Create in `progman/widgets/`
+2. Import in `progman/widgets/__init__.py`
+3. Add tests in `tests/`
