@@ -18,7 +18,7 @@ from PyQt6.QtWidgets import (
 
 from ..models.program_group import ProgramGroup
 from ..models.program_item import ProgramItem
-from ..utils.icons import make_classic_fallback_icon
+from ..utils.icons import icon_for_executable, is_executable_icon, make_classic_fallback_icon
 from ..utils.launcher import Launcher
 from .program_item_dialog import ProgramItemDialog
 
@@ -231,7 +231,13 @@ class GroupWindow(QWidget):
 
     def _get_icon_for_item(self, item: ProgramItem) -> Optional[QIcon]:
         if item.icon_path and Path(item.icon_path).exists():
-            return QIcon(item.icon_path)
+            if is_executable_icon(item.icon_path):
+                icon = icon_for_executable(item.icon_path)
+                if icon is not None:
+                    return icon
+                # Extraction failed -- fall through to fallback
+            else:
+                return QIcon(item.icon_path)
         return make_classic_fallback_icon(item.title, dark_mode=self._dark_mode)
 
     def _on_item_double_clicked(self, lw_item: QListWidgetItem) -> None:

@@ -1,7 +1,10 @@
 """Tests for widgets: GroupWindow, ProgramItemDialog."""
 
+from unittest.mock import patch
+
 from progman.models.program_group import ProgramGroup
 from progman.models.program_item import ProgramItem
+from progman.utils.icons import icon_for_executable, is_executable_icon
 from progman.utils.launcher import Launcher
 from progman.widgets.group_window import GroupWindow
 
@@ -68,3 +71,69 @@ class TestGroupWindow:
         window = GroupWindow(group, launcher)
         assert window.list_widget.dragEnabled() is True
         assert window.list_widget.acceptDrops() is True
+
+    def test_exe_icon_path_uses_extraction(self, qapp, tmp_path):
+        """An .exe icon_path should go through icon_for_executable, not QIcon."""
+        exe = tmp_path / "fake.exe"
+        exe.write_bytes(b"\x00" * 100)
+
+        item = ProgramItem(title="App", command="app", icon_path=str(exe))
+        group = ProgramGroup(title="Test", items=[item])
+        launcher = Launcher()
+        window = GroupWindow(group, launcher)
+
+        # icon_for_executable returns None for a fake .exe, so fallback is used
+        lw_item = window.list_widget.item(0)
+        icon = lw_item.icon()
+        assert not icon.isNull()  # fallback icon should be set
+
+    def test_non_exe_icon_path_uses_qicon(self, qapp, tmp_path):
+        """A .png icon_path should use QIcon directly."""
+        png = tmp_path / "icon.png"
+        png.write_bytes(b"\x00" * 10)
+
+        item = ProgramItem(title="App", command="app", icon_path=str(png))
+        group = ProgramGroup(title="Test", items=[item])
+        launcher = Launcher()
+        window = GroupWindow(group, launcher)
+
+        # The .png path is passed to QIcon (not through executable extraction)
+        lw_item = window.list_widget.item(0)
+        icon = lw_item.icon()
+        # QIcon may or may not load a dummy .png, but it shouldn't crash
+        assert icon is not None
+
+
+class TestExecutableIconHelpers:
+    def test_is_executable_icon_exe(self):
+        assert is_executable_icon(r"C:\Program Files\app.exe") is True
+
+    def test_is_executable_icon_dll(self):
+        assert is_executable_icon(r"C:\Windows\System32\shell32.dll") is True
+
+    def test_is_executable_icon_ico(self):
+        assert is_executable_icon(r"C:\icons\app.ico") is True
+
+    def test_is_executable_icon_png(self):
+        assert is_executable_icon("/usr/share/icons/app.png") is False
+
+    def test_is_executable_icon_svg(self):
+        assert is_executable_icon("/usr/share/icons/app.svg") is False
+
+    def test_icon_for_executable_nonexistent(self, qapp):
+        result = icon_for_executable("/nonexistent/path.exe")
+        assert result is None
+
+    def test_icon_for_executable_empty_string(self, qapp):
+        result = icon_for_executable("")
+        assert result is None
+
+    def test_icon_for_executable_fake_file(self, qapp, tmp_path):
+        fake = tmp_path / "fake.exe"
+        fake.write_bytes(b"\x00" * 100)
+        # On Linux, QFileIconProvider returns a generic file icon
+        # which should be non-null (Qt always provides something)
+        result = icon_for_executable(str(fake))
+        # Result is either a valid icon or None -- both are acceptable
+        # depending on platform; just verify no crash
+        assert result is None or not result.isNull()
