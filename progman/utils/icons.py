@@ -1,7 +1,43 @@
 """Icon generation utilities for Program Manager."""
 
-from PyQt6.QtCore import Qt
+from pathlib import Path
+from typing import Optional
+
+from PyQt6.QtCore import QFileInfo, Qt
 from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPixmap
+from PyQt6.QtWidgets import QFileIconProvider
+
+# Extensions that may contain embedded icons on Windows
+_EXECUTABLE_EXTENSIONS = {".exe", ".dll", ".ico"}
+
+
+def icon_for_executable(path: str) -> Optional[QIcon]:
+    """Extract an icon from a Windows executable, DLL, or .ico file.
+
+    Uses Qt's QFileIconProvider which delegates to the native platform
+    icon lookup.  On Windows this extracts the embedded icon from PE
+    files.  Returns None if the file does not exist or has no icon.
+    """
+    if not path or not Path(path).is_file():
+        return None
+
+    try:
+        provider = QFileIconProvider()
+        icon = provider.icon(QFileInfo(path))
+        # QFileIconProvider always returns *something* (at minimum the
+        # platform's generic file icon).  Check that it has pixel data
+        # of a reasonable size to filter out blank results.
+        pixmap = icon.pixmap(32, 32)
+        if pixmap.isNull() or pixmap.width() < 8:
+            return None
+        return icon
+    except Exception:
+        return None
+
+
+def is_executable_icon(path: str) -> bool:
+    """Return True if *path* looks like a Windows executable icon source."""
+    return Path(path).suffix.lower() in _EXECUTABLE_EXTENSIONS
 
 
 def make_classic_fallback_icon(title: str, dark_mode: bool = False) -> QIcon:
