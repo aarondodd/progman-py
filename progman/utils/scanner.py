@@ -8,10 +8,10 @@ import configparser
 import os
 import platform
 import re
-import subprocess
-from dataclasses import dataclass, field
+import struct
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import List, Optional
 
 
 @dataclass
@@ -212,56 +212,158 @@ def _scan_windows() -> List[DiscoveredApp]:
 
 
 def _parse_lnk_file(lnk_path: Path, start_dir: Path) -> Optional[DiscoveredApp]:
-    """Parse a Windows .lnk shortcut using PowerShell."""
-    try:
-        ps_cmd = (
-            f'(New-Object -ComObject WScript.Shell)'
-            f'.CreateShortcut("{lnk_path}") | '
-            f'Select-Object -Property TargetPath,WorkingDirectory,IconLocation | '
-            f'ConvertTo-Json'
-        )
-        result = subprocess.run(
-            ["powershell", "-Command", ps_cmd],
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-        if result.returncode != 0:
-            return None
+    """Parse a Windows .lnk shortcut by reading the binary format directly.
 
-        import json
-        data = json.loads(result.stdout)
-
-        target = data.get("TargetPath", "")
-        if not target:
-            return None
-
-        # Skip uninstallers and system utilities
-        lower_target = target.lower()
-        if any(skip in lower_target for skip in ["uninstall", "unins0"]):
-            return None
-
-        name = lnk_path.stem
-        icon_loc = data.get("IconLocation", "")
-        icon_path = ""
-        if icon_loc and "," in icon_loc:
-            icon_path = icon_loc.split(",")[0].strip()
-            if icon_path and not os.path.exists(icon_path):
-                icon_path = ""
-
-        # Determine group from subfolder
-        relative = lnk_path.parent.relative_to(start_dir)
-        group = str(relative) if str(relative) != "." else "Programs"
-
-        return DiscoveredApp(
-            name=name,
-            command=target,
-            icon_path=icon_path,
-            group=group,
-        )
-
-    except Exception:
+    Implements the MS-SHLLINK binary format (Shell Link) using struct.
+    No subprocess or COM calls needed.
+    """
+    data = _parse_lnk_binary(lnk_path)
+    if data is None:
         return None
+
+    target = data.get("target_path", "")
+    if not target:
+        return None
+
+    # Skip uninstallers and system utilities
+    lower_target = target.lower()
+    if any(skip in lower_target for skip in ["uninstall", "unins0"]):
+        return None
+
+    name = lnk_path.stem
+    icon_path = data.get("icon_location", "")
+    if icon_path and "," in icon_path:
+        icon_path = icon_path.split(",")[0].strip()
+    if icon_path and not os.path.exists(icon_path):
+        icon_path = ""
+
+    # Determine group from subfolder
+    relative = lnk_path.parent.relative_to(start_dir)
+    group = str(relative) if str(relative) != "." else "Programs"
+
+    return DiscoveredApp(
+        name=name,
+        command=target,
+        icon_path=icon_path,
+        group=group,
+    )
+
+
+def _parse_lnk_binary(lnk_path: Path) -> Optional[dict]:
+    """Parse the MS-SHLLINK binary format and extract target path and icon.
+
+    Reference: [MS-SHLLINK] Shell Link Binary File Format
+    https://learn.microsoft.com/en-us/openspecs/windows_protocols/ms-shllink/
+    """
+    try:
+        with open(lnk_path, "rb") as f:
+            buf = f.read()
+    except OSError:
+        return None
+
+    # ShellLinkHeader is 76 bytes; first 4 bytes are header size (must be 0x4C)
+    if len(buf) < 76:
+        return None
+    header_size = struct.unpack_from("<I", buf, 0)[0]
+    if header_size != 0x4C:
+        return None
+
+    flags = struct.unpack_from("<I", buf, 20)[0]
+    has_target_id_list = bool(flags & 0x01)
+    has_link_info = bool(flags & 0x02)
+    has_name = bool(flags & 0x04)
+    has_relative_path = bool(flags & 0x08)
+    has_working_dir = bool(flags & 0x10)
+    has_arguments = bool(flags & 0x20)
+    has_icon_location = bool(flags & 0x40)
+    is_unicode = bool(flags & 0x80)
+
+    offset = 76
+
+    # Skip LinkTargetIDList
+    if has_target_id_list:
+        if offset + 2 > len(buf):
+            return None
+        id_list_size = struct.unpack_from("<H", buf, offset)[0]
+        offset += 2 + id_list_size
+
+    # Parse LinkInfo for local base path
+    target_path = ""
+    if has_link_info:
+        if offset + 28 > len(buf):
+            return None
+        link_info_size = struct.unpack_from("<I", buf, offset)[0]
+        link_info_start = offset
+        link_info_header_size = struct.unpack_from("<I", buf, offset + 4)[0]
+        link_info_flags = struct.unpack_from("<I", buf, offset + 8)[0]
+
+        if link_info_flags & 0x01:  # VolumeIDAndLocalBasePath
+            local_base_path_off = struct.unpack_from("<I", buf, offset + 16)[0]
+            path_start = link_info_start + local_base_path_off
+            if path_start < len(buf):
+                # Null-terminated ANSI string
+                end = buf.index(b"\x00", path_start)
+                target_path = buf[path_start:end].decode("cp1252", errors="replace")
+
+            # Prefer Unicode local base path if available
+            if link_info_header_size >= 0x24 and offset + 32 <= len(buf):
+                unicode_off = struct.unpack_from("<I", buf, offset + 28)[0]
+                if unicode_off:
+                    upath_start = link_info_start + unicode_off
+                    if upath_start < len(buf):
+                        target_path = _read_utf16z(buf, upath_start)
+
+        offset = link_info_start + link_info_size
+
+    # Parse StringData sections (order is fixed by the spec)
+    def _read_counted_string() -> str:
+        nonlocal offset
+        if offset + 2 > len(buf):
+            return ""
+        count = struct.unpack_from("<H", buf, offset)[0]
+        offset += 2
+        if is_unicode:
+            byte_count = count * 2
+            if offset + byte_count > len(buf):
+                return ""
+            s = buf[offset : offset + byte_count].decode(
+                "utf-16-le", errors="replace"
+            )
+            offset += byte_count
+        else:
+            if offset + count > len(buf):
+                return ""
+            s = buf[offset : offset + count].decode("cp1252", errors="replace")
+            offset += count
+        return s
+
+    name_string = _read_counted_string() if has_name else ""
+    relative_path = _read_counted_string() if has_relative_path else ""
+    working_dir = _read_counted_string() if has_working_dir else ""
+    arguments = _read_counted_string() if has_arguments else ""
+    icon_location = _read_counted_string() if has_icon_location else ""
+
+    # Relative path as fallback for target
+    if not target_path and relative_path:
+        target_path = relative_path
+
+    return {
+        "target_path": target_path,
+        "working_dir": working_dir,
+        "icon_location": icon_location,
+    }
+
+
+def _read_utf16z(buf: bytes, offset: int) -> str:
+    """Read a null-terminated UTF-16LE string from *buf* at *offset*."""
+    chars = []
+    while offset + 1 < len(buf):
+        code_unit = struct.unpack_from("<H", buf, offset)[0]
+        if code_unit == 0:
+            break
+        chars.append(chr(code_unit))
+        offset += 2
+    return "".join(chars)
 
 
 def _scan_macos() -> List[DiscoveredApp]:
