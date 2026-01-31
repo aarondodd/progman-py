@@ -29,7 +29,7 @@ progman-py/
 ├── tests/                   # Comprehensive test suite
 ├── icons/                   # Optional icon assets
 ├── screenshots/
-├── build.sh / build.cmd     # Build scripts
+├── build.sh / build.ps1     # Build scripts
 ├── requirements.txt         # Runtime dependencies
 └── requirements-dev.txt     # Development/test dependencies
 ```
@@ -90,7 +90,7 @@ Uses the GitHub public API (no authentication required) to check for new release
 ```bash
 pip install pyinstaller
 ./build.sh        # Linux/macOS
-build.cmd         # Windows
+./build.ps1       # Windows (PowerShell)
 ```
 The resulting executable appears in `dist/progman` (or `dist/progman.exe` on Windows).
 

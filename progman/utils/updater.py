@@ -156,7 +156,7 @@ def extract_archive(zip_path: str, extract_dir: str) -> Optional[str]:
 def find_build_script(source_dir: str) -> Optional[str]:
     """Find the build script in the source directory."""
     system = platform.system()
-    script_name = "build.cmd" if system == "Windows" else "build.sh"
+    script_name = "build.ps1" if system == "Windows" else "build.sh"
 
     direct_path = os.path.join(source_dir, script_name)
     if os.path.exists(direct_path):
@@ -177,7 +177,7 @@ def run_build_script(source_dir: str, output_callback=None) -> Tuple[bool, str]:
     system = platform.system()
 
     if system == "Windows":
-        shell_cmd = ["cmd", "/c"]
+        shell_cmd = ["powershell", "-ExecutionPolicy", "Bypass", "-File"]
     else:
         shell_cmd = ["bash"]
 

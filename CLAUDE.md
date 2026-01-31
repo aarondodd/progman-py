@@ -24,8 +24,8 @@ QT_QPA_PLATFORM=offscreen pytest tests/ -v
 # Linux/macOS
 ./build.sh
 
-# Windows
-build.cmd
+# Windows (PowerShell)
+./build.ps1
 
 # Manual build command
 pyinstaller --noconfirm --clean --windowed --onefile --name progman --collect-all PyQt6 main.py
