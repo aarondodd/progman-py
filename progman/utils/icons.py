@@ -1,5 +1,7 @@
 """Icon generation utilities for Program Manager."""
 
+import os
+import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Optional
 
@@ -119,3 +121,168 @@ def make_group_icon(dark_mode: bool = False) -> QIcon:
 
     p.end()
     return QIcon(pm)
+
+
+def icon_for_uwp_app(aumid: str) -> Optional[QIcon]:
+    """Extract icon from a UWP app's package assets.
+
+    Args:
+        aumid: Application User Model ID (e.g., Microsoft.WindowsTerminal_8wekyb3d8bbwe!App)
+
+    Returns:
+        QIcon if found, None otherwise.
+    """
+    if "!" not in aumid:
+        return None
+
+    package_family = aumid.split("!")[0]
+
+    # Find install location
+    install_path = _find_uwp_install_path(package_family)
+    if not install_path:
+        return None
+
+    manifest_path = Path(install_path) / "AppxManifest.xml"
+    if not manifest_path.exists():
+        return None
+
+    # Parse manifest for logo path
+    logo_path = _parse_manifest_logo(manifest_path, install_path)
+    if logo_path and Path(logo_path).exists():
+        return QIcon(logo_path)
+
+    return None
+
+
+def _find_uwp_install_path(package_family: str) -> Optional[str]:
+    """Find the install path for a UWP package.
+
+    Searches the WindowsApps directory for matching package folders.
+    """
+    windows_apps = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "WindowsApps"
+
+    if not windows_apps.exists():
+        return None
+
+    try:
+        # Package folders are named: PackageName_Version_Architecture_ResourceId_PublisherHash
+        # Package family is: PackageName_PublisherHash
+        for folder in windows_apps.iterdir():
+            if not folder.is_dir():
+                continue
+            folder_name = folder.name
+            # Check if this folder matches the package family pattern
+            parts = folder_name.split("_")
+            if len(parts) >= 2:
+                # Reconstruct family name: first part + last part
+                reconstructed = f"{parts[0]}_{parts[-1]}"
+                if reconstructed == package_family:
+                    return str(folder)
+    except PermissionError:
+        # WindowsApps is often protected
+        pass
+
+    return None
+
+
+def _parse_manifest_logo(manifest_path: Path, install_path: str) -> Optional[str]:
+    """Parse AppxManifest.xml to find the app logo.
+
+    Args:
+        manifest_path: Path to AppxManifest.xml
+        install_path: Root installation path of the package
+
+    Returns:
+        Resolved path to the logo file, or None if not found.
+    """
+    try:
+        tree = ET.parse(manifest_path)
+        root = tree.getroot()
+
+        # Handle namespaces - AppxManifest uses several
+        ns = {
+            "default": "http://schemas.microsoft.com/appx/manifest/foundation/windows10",
+            "uap": "http://schemas.microsoft.com/appx/manifest/uap/windows10",
+            "uap3": "http://schemas.microsoft.com/appx/manifest/uap/windows10/3",
+        }
+
+        # Also try without namespace prefix for older manifests
+        for app in root.findall(".//default:Application", ns):
+            visual = app.find("uap:VisualElements", ns)
+            if visual is not None:
+                # Try different logo attributes in preference order
+                for attr in ["Square44x44Logo", "Square150x150Logo", "Square71x71Logo"]:
+                    logo = visual.get(attr)
+                    if logo:
+                        resolved = _resolve_uwp_logo(install_path, logo)
+                        if resolved:
+                            return resolved
+
+        # Try without namespace (fallback for older manifests)
+        for app in root.iter():
+            if app.tag.endswith("VisualElements"):
+                for attr in ["Square44x44Logo", "Square150x150Logo", "Square71x71Logo"]:
+                    logo = app.get(attr)
+                    if logo:
+                        resolved = _resolve_uwp_logo(install_path, logo)
+                        if resolved:
+                            return resolved
+
+    except ET.ParseError:
+        pass
+    except Exception:
+        pass
+
+    return None
+
+
+def _resolve_uwp_logo(install_path: str, logo_relative: str) -> Optional[str]:
+    """Resolve a UWP logo path with scale variants.
+
+    UWP apps often have multiple versions of logos at different scales.
+    This function tries to find the best available version.
+
+    Args:
+        install_path: Root installation path
+        logo_relative: Relative path from manifest (e.g., "Assets\\Square44x44Logo.png")
+
+    Returns:
+        Absolute path to the logo file, or None if not found.
+    """
+    base = Path(install_path) / logo_relative
+
+    # Try exact path first
+    if base.exists():
+        return str(base)
+
+    # Try scale variants
+    parent = base.parent
+    stem = base.stem
+    suffix = base.suffix
+
+    if not parent.exists():
+        return None
+
+    # Try scale variants (smaller first for icons)
+    for scale in ["scale-100", "scale-125", "scale-150", "scale-200", "scale-400"]:
+        candidate = parent / f"{stem}.{scale}{suffix}"
+        if candidate.exists():
+            return str(candidate)
+
+    # Try targetsize variants (commonly used for app icons)
+    for size in [44, 48, 32, 64, 24, 16, 256]:
+        candidate = parent / f"{stem}.targetsize-{size}{suffix}"
+        if candidate.exists():
+            return str(candidate)
+        # Also try with _altform-unplated suffix
+        candidate_unplated = parent / f"{stem}.targetsize-{size}_altform-unplated{suffix}"
+        if candidate_unplated.exists():
+            return str(candidate_unplated)
+
+    # Try contrast variants
+    for contrast in ["contrast-white", "contrast-black"]:
+        candidate = parent / f"{stem}.{contrast}{suffix}"
+        if candidate.exists():
+            return str(candidate)
+
+    return None

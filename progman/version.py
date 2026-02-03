@@ -4,11 +4,11 @@ This is the single source of truth for the version number.
 Update this file when releasing a new version.
 """
 
-__version__ = "1.0.2"
+__version__ = "1.0.3"
 
 VERSION_MAJOR = 1
 VERSION_MINOR = 0
-VERSION_PATCH = 2
+VERSION_PATCH = 3
 
 VERSION_TUPLE = (VERSION_MAJOR, VERSION_MINOR, VERSION_PATCH)
 

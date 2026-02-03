@@ -42,6 +42,38 @@ CATEGORY_MAP = {
     "Accessories": "Accessories",
 }
 
+# Windows app AUMID prefix -> category mapping
+WINDOWS_APP_CATEGORIES = {
+    "Microsoft.WindowsCalculator": "Accessories",
+    "Microsoft.WindowsTerminal": "System Tools",
+    "Microsoft.Paint": "Accessories",
+    "Microsoft.Photos": "Multimedia",
+    "Microsoft.WindowsCamera": "Multimedia",
+    "Microsoft.WindowsNotepad": "Accessories",
+    "Microsoft.WindowsStore": "System Tools",
+    "Microsoft.MicrosoftEdge": "Internet",
+    "Microsoft.ScreenSketch": "Accessories",
+    "Microsoft.Windows.DevHome": "Development",
+    "Microsoft.VisualStudio": "Development",
+    "Microsoft.VSCode": "Development",
+    "Microsoft.ZuneMusic": "Multimedia",
+    "Microsoft.ZuneVideo": "Multimedia",
+    "Microsoft.Windows.Photos": "Multimedia",
+    "Microsoft.WindowsMaps": "Accessories",
+    "Microsoft.WindowsAlarms": "Accessories",
+    "Microsoft.BingWeather": "Accessories",
+    "Microsoft.BingNews": "Internet",
+    "Microsoft.GetHelp": "System Tools",
+    "Microsoft.MicrosoftStickyNotes": "Accessories",
+    "Microsoft.Todos": "Office",
+    "Microsoft.Office": "Office",
+    "Microsoft.MicrosoftOfficeHub": "Office",
+    "Microsoft.PowerAutomateDesktop": "Office",
+    "Microsoft.Xbox": "Games",
+    "Microsoft.GamingApp": "Games",
+    "Microsoft.XboxGamingOverlay": "Games",
+}
+
 
 def scan_applications() -> List[DiscoveredApp]:
     """Scan for installed applications on the current platform."""
@@ -178,8 +210,112 @@ def _resolve_linux_icon(icon: str) -> str:
     return ""
 
 
-def _scan_windows() -> List[DiscoveredApp]:
-    """Scan Start Menu folders on Windows."""
+def _categorize_windows_app(name: str, aumid: str) -> str:
+    """Categorize a Windows app based on its name or AUMID."""
+    # Check AUMID prefix against known categories
+    for prefix, category in WINDOWS_APP_CATEGORIES.items():
+        if aumid.startswith(prefix):
+            return category
+
+    # Fallback heuristics based on name
+    name_lower = name.lower()
+    if any(kw in name_lower for kw in ["game", "xbox"]):
+        return "Games"
+    if any(kw in name_lower for kw in ["office", "word", "excel", "powerpoint", "outlook"]):
+        return "Office"
+    if any(kw in name_lower for kw in ["visual studio", "code", "developer", "studio"]):
+        return "Development"
+    if any(kw in name_lower for kw in ["browser", "edge", "chrome", "firefox", "internet"]):
+        return "Internet"
+    if any(kw in name_lower for kw in ["media", "player", "music", "video", "photo"]):
+        return "Multimedia"
+
+    return "Programs"
+
+
+def is_aumid(command: str) -> bool:
+    """Check if command looks like a UWP Application User Model ID (AUMID).
+
+    AUMIDs have the format: PackageFamilyName!ApplicationId
+    Example: Microsoft.WindowsTerminal_8wekyb3d8bbwe!App
+    """
+    if "!" not in command:
+        return False
+    # If the part before '!' is an existing file path, it's not an AUMID
+    prefix = command.split("!")[0]
+    return not os.path.exists(prefix)
+
+
+def _scan_windows_shell() -> List[DiscoveredApp]:
+    """Scan shell:AppsFolder for all launchable applications using COM.
+
+    This enumerates the virtual shell folder that contains all installed
+    applications, including both traditional Win32 apps and modern UWP/MSIX apps.
+    """
+    from win32com.shell import shell, shellcon
+
+    apps = []
+    seen_names = set()
+
+    # Get desktop folder as entry point
+    desktop = shell.SHGetDesktopFolder()
+
+    # Parse shell:AppsFolder to get its PIDL
+    pidl, _ = desktop.ParseDisplayName(0, None, "shell:AppsFolder")
+
+    # Bind to AppsFolder
+    apps_folder = desktop.BindToObject(pidl, None, shell.IID_IShellFolder)
+
+    # Enumerate all items (non-folders = apps)
+    enum = apps_folder.EnumObjects(0, shellcon.SHCONTF_NONFOLDERS)
+
+    while True:
+        pidls = enum.Next(1)
+        if not pidls:
+            break
+
+        item_pidl = pidls[0]
+
+        try:
+            # Get display name (user-visible)
+            name = apps_folder.GetDisplayNameOf(item_pidl, shellcon.SHGDN_NORMAL)
+
+            # Get parsing name (AUMID for UWP or exe path for traditional)
+            aumid = apps_folder.GetDisplayNameOf(item_pidl, shellcon.SHGDN_FORPARSING)
+
+            if name in seen_names:
+                continue
+            seen_names.add(name)
+
+            # Skip uninstallers
+            if "uninstall" in name.lower():
+                continue
+
+            # Get icon path (for traditional apps, use the exe path)
+            icon_path = ""
+            if not is_aumid(aumid) and os.path.exists(aumid):
+                icon_path = aumid
+
+            # Categorize the app
+            group = _categorize_windows_app(name, aumid)
+
+            apps.append(DiscoveredApp(
+                name=name,
+                command=aumid,
+                icon_path=icon_path,
+                group=group,
+            ))
+        except Exception:
+            continue
+
+    return sorted(apps, key=lambda a: a.name.lower())
+
+
+def _scan_windows_lnk() -> List[DiscoveredApp]:
+    """Scan Start Menu folders on Windows for .lnk shortcuts.
+
+    This is the fallback method when pywin32 is not available.
+    """
     apps = []
     start_menu_dirs = []
 
@@ -209,6 +345,22 @@ def _scan_windows() -> List[DiscoveredApp]:
 
     apps.sort(key=lambda a: a.name.lower())
     return apps
+
+
+def _scan_windows() -> List[DiscoveredApp]:
+    """Scan for Windows applications.
+
+    Tries shell namespace enumeration first (discovers all apps including UWP),
+    falls back to .lnk scanning if pywin32 is not available.
+    """
+    try:
+        return _scan_windows_shell()
+    except ImportError:
+        # pywin32 not available, fall back to .lnk scanning
+        return _scan_windows_lnk()
+    except Exception:
+        # Shell enumeration failed, fall back
+        return _scan_windows_lnk()
 
 
 def _parse_lnk_file(lnk_path: Path, start_dir: Path) -> Optional[DiscoveredApp]:
