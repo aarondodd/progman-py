@@ -10,8 +10,11 @@ from progman.utils.scanner import (
     _parse_desktop_file,
     _parse_lnk_binary,
     _resolve_linux_icon,
+    _categorize_windows_app,
+    is_aumid,
     scan_applications,
     CATEGORY_MAP,
+    WINDOWS_APP_CATEGORIES,
     DiscoveredApp,
 )
 
@@ -313,3 +316,88 @@ class TestScanApplications:
         assert app.name == "Test"
         assert app.command == "test"
         assert app.group == "Tools"
+
+
+class TestAumidDetection:
+    def test_is_aumid_with_valid_aumid(self):
+        """Valid AUMIDs contain '!' and the prefix is not a file path."""
+        assert is_aumid("Microsoft.WindowsTerminal_8wekyb3d8bbwe!App") is True
+        assert is_aumid("Microsoft.WindowsCalculator_8wekyb3d8bbwe!App") is True
+        assert is_aumid("Company.SomeApp_abc123!SomeId") is True
+
+    def test_is_aumid_without_exclamation(self):
+        """Commands without '!' are not AUMIDs."""
+        assert is_aumid(r"C:\Program Files\app.exe") is False
+        assert is_aumid("notepad.exe") is False
+        assert is_aumid("/usr/bin/app") is False
+
+    def test_is_aumid_with_existing_path_prefix(self, tmp_path):
+        """If the part before '!' exists as a path, it's not an AUMID."""
+        # Create a file with '!' in command that has an existing path prefix
+        existing_file = tmp_path / "somefile"
+        existing_file.touch()
+        # This looks like an AUMID but the prefix exists as a file
+        assert is_aumid(f"{existing_file}!Something") is False
+
+
+class TestWindowsAppCategorization:
+    def test_categorize_known_apps(self):
+        """Known Windows apps get their correct category."""
+        assert _categorize_windows_app(
+            "Windows Terminal", "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"
+        ) == "System Tools"
+        assert _categorize_windows_app(
+            "Calculator", "Microsoft.WindowsCalculator_8wekyb3d8bbwe!App"
+        ) == "Accessories"
+        assert _categorize_windows_app(
+            "Photos", "Microsoft.Windows.Photos_8wekyb3d8bbwe!App"
+        ) == "Multimedia"
+
+    def test_categorize_by_name_heuristics(self):
+        """Unknown apps get categorized by name keywords."""
+        assert _categorize_windows_app(
+            "Some Game", "UnknownPublisher.SomeGame_abc!App"
+        ) == "Games"
+        assert _categorize_windows_app(
+            "Xbox Live", "UnknownPublisher.XboxLive_abc!App"
+        ) == "Games"
+        assert _categorize_windows_app(
+            "Visual Studio Code", "UnknownPublisher.VSCode_abc!App"
+        ) == "Development"
+        assert _categorize_windows_app(
+            "My Browser", "UnknownPublisher.Browser_abc!App"
+        ) == "Internet"
+
+    def test_categorize_fallback(self):
+        """Unknown apps without matching keywords get 'Programs'."""
+        assert _categorize_windows_app(
+            "Random App", "UnknownPublisher.RandomApp_abc!App"
+        ) == "Programs"
+
+
+class TestWindowsShellScan:
+    def test_scan_windows_shell_import_error(self):
+        """When pywin32 is not available, should fall back to lnk scanning."""
+        with patch("progman.utils.scanner._scan_windows_shell") as mock_shell:
+            mock_shell.side_effect = ImportError("No module named 'win32com'")
+            with patch("progman.utils.scanner._scan_windows_lnk") as mock_lnk:
+                mock_lnk.return_value = [
+                    DiscoveredApp(name="Test", command="test.exe", group="Programs")
+                ]
+                from progman.utils.scanner import _scan_windows
+                result = _scan_windows()
+                assert len(result) == 1
+                assert result[0].name == "Test"
+
+    def test_scan_windows_shell_exception(self):
+        """When shell scan fails with exception, should fall back to lnk scanning."""
+        with patch("progman.utils.scanner._scan_windows_shell") as mock_shell:
+            mock_shell.side_effect = Exception("COM error")
+            with patch("progman.utils.scanner._scan_windows_lnk") as mock_lnk:
+                mock_lnk.return_value = [
+                    DiscoveredApp(name="Fallback", command="app.exe", group="Programs")
+                ]
+                from progman.utils.scanner import _scan_windows
+                result = _scan_windows()
+                assert len(result) == 1
+                assert result[0].name == "Fallback"
