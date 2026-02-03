@@ -45,10 +45,18 @@ def test_apps_folder_parse(desktop):
     print("Step 3: Testing shell:AppsFolder parsing")
     print("=" * 60)
     try:
-        pidl, flags = desktop.ParseDisplayName(0, None, "shell:AppsFolder")
+        result = desktop.ParseDisplayName(0, None, "shell:AppsFolder")
         print(f"✓ Parsed shell:AppsFolder")
+        print(f"  Result type: {type(result)}")
+        print(f"  Result length: {len(result) if hasattr(result, '__len__') else 'N/A'}")
+        print(f"  Result: {result}")
+
+        # Extract PIDL - it's typically the first element
+        if isinstance(result, tuple):
+            pidl = result[0]
+        else:
+            pidl = result
         print(f"  PIDL: {pidl}")
-        print(f"  Flags: {flags}")
         return pidl
     except Exception as e:
         print(f"✗ Failed to parse shell:AppsFolder: {e}")

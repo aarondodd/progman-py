@@ -261,7 +261,9 @@ def _scan_windows_shell() -> List[DiscoveredApp]:
     desktop = shell.SHGetDesktopFolder()
 
     # Parse shell:AppsFolder to get its PIDL
-    pidl, _ = desktop.ParseDisplayName(0, None, "shell:AppsFolder")
+    # ParseDisplayName returns (pidl, eaten, attributes) - we only need pidl
+    result = desktop.ParseDisplayName(0, None, "shell:AppsFolder")
+    pidl = result[0] if isinstance(result, tuple) else result
 
     # Bind to AppsFolder
     apps_folder = desktop.BindToObject(pidl, None, shell.IID_IShellFolder)
