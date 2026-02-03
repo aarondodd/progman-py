@@ -51,9 +51,9 @@ def test_apps_folder_parse(desktop):
         print(f"  Result length: {len(result) if hasattr(result, '__len__') else 'N/A'}")
         print(f"  Result: {result}")
 
-        # Extract PIDL - it's typically the first element
+        # Extract PIDL - it's the second element (eaten_chars, pidl, attributes)
         if isinstance(result, tuple):
-            pidl = result[0]
+            pidl = result[1]
         else:
             pidl = result
         print(f"  PIDL: {pidl}")
